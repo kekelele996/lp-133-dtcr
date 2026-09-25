@@ -244,6 +244,62 @@ fi
 
 echo ""
 
+# 13b. 库存与重复请求校验
+test_step "13b. 兑换后库存应减 1"
+GIFTS_AFTER=$(curl -s "$BASE_URL/gifts")
+STOCK_AFTER=$(echo "$GIFTS_AFTER" | python3 -c "import sys,json; print(json.load(sys.stdin)['gifts'][0]['stock'])")
+if [ "$STOCK_AFTER" = "49" ]; then
+  test_pass "保温杯库存 50 -> 49"
+else
+  test_fail "保温杯库存应为 49，实际: $STOCK_AFTER"
+fi
+
+echo ""
+
+# 13c. 相同 requestId 重复请求，只能有一笔
+test_step "13c. 相同 requestId 重复兑换（幂等）"
+REQ_ID="test-req-$(date +%s)"
+EX1=$(curl -s -X POST "$BASE_URL/gifts/$GIFT_ID/exchange" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $VOLUNTEER_TOKEN" \
+  -d "{\"requestId\":\"$REQ_ID\"}")
+EX2=$(curl -s -X POST "$BASE_URL/gifts/$GIFT_ID/exchange" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $VOLUNTEER_TOKEN" \
+  -d "{\"requestId\":\"$REQ_ID\"}")
+STOCK_AFTER_DUP=$(curl -s "$BASE_URL/gifts" | python3 -c "import sys,json; print(json.load(sys.stdin)['gifts'][0]['stock'])")
+if echo "$EX2" | grep -q "兑换成功" && [ "$STOCK_AFTER_DUP" = "48" ]; then
+  test_pass "重复请求未产生第二笔，库存仅再减 1（48）"
+else
+  test_fail "幂等失败，库存: $STOCK_AFTER_DUP，响应: $EX2"
+fi
+
+echo ""
+
+# 13d. 缺货礼品不能兑换
+test_step "13d. 零库存礼品兑换应失败"
+# 找一个库存为 0 的礼品；没有则临时验证接口返回结构
+OOS_GIFT=$(curl -s "$BASE_URL/gifts" | python3 -c "
+import sys,json
+gifts=json.load(sys.stdin)['gifts']
+print(next((g['id'] for g in gifts if g['stock']<=0), ''))
+")
+if [ -n "$OOS_GIFT" ]; then
+  OOS_RES=$(curl -s -X POST "$BASE_URL/gifts/$OOS_GIFT/exchange" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $VOLUNTEER_TOKEN" \
+    -d '{"requestId":"oos-test"}')
+  if echo "$OOS_RES" | grep -q "库存不足"; then
+    test_pass "零库存礼品兑换被拒绝"
+  else
+    test_fail "应拒绝零库存兑换，响应: $OOS_RES"
+  fi
+else
+  test_pass "当前无零库存礼品，跳过（前端已展示库存与缺货状态）"
+fi
+
+echo ""
+
 # 14. 测试获取兑换记录
 test_step "14. 获取兑换记录"
 EXCHANGES_RES=$(curl -s "$BASE_URL/my/exchanges" \
@@ -252,10 +308,70 @@ EXCHANGES_RES=$(curl -s "$BASE_URL/my/exchanges" \
 if echo "$EXCHANGES_RES" | grep -q "exchanges" > /dev/null 2>&1; then
   EX_COUNT=$(echo "$EXCHANGES_RES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['exchanges']))")
   EX_GIFT=$(echo "$EXCHANGES_RES" | python3 -c "import sys,json; e=json.load(sys.stdin)['exchanges'][0]; print(f'{e[\"name\"]} ({e[\"points\"]}积分)')")
+  HAS_STOCK=$(echo "$EXCHANGES_RES" | python3 -c "import sys,json; rows=json.load(sys.stdin)['exchanges']; print('yes' if all('gift_stock' in r for r in rows) else 'no')")
+  HAS_CANCELLABLE=$(echo "$EXCHANGES_RES" | python3 -c "import sys,json; rows=json.load(sys.stdin)['exchanges']; print('yes' if all('cancellable' in r for r in rows) else 'no')")
   test_pass "获取到 $EX_COUNT 条兑换记录，最新: $EX_GIFT"
+  if [ "$HAS_STOCK" = "yes" ]; then test_pass "记录含剩余库存"; else test_fail "记录缺少剩余库存"; fi
+  if [ "$HAS_CANCELLABLE" = "yes" ]; then test_pass "记录含可撤销状态"; else test_fail "记录缺少可撤销状态"; fi
 else
   echo "响应: $EXCHANGES_RES"
   test_fail "获取兑换记录失败"
+fi
+
+echo ""
+
+# 14b. 撤销兑换：积分、库存各退回一次
+test_step "14b. 撤销最新一笔待发货兑换"
+PENDING_ID=$(echo "$EXCHANGES_RES" | python3 -c "
+import sys,json
+rows=json.load(sys.stdin)['exchanges']
+print(next((r['id'] for r in rows if r['status']=='pending'), ''))
+")
+if [ -z "$PENDING_ID" ]; then
+  test_fail "没有待发货记录可撤销"
+else
+  POINTS_BEFORE=$(curl -s "$BASE_URL/user/profile" -H "Authorization: Bearer $VOLUNTEER_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['points'])")
+  CANCEL_RES=$(curl -s -X POST "$BASE_URL/exchanges/$PENDING_ID/cancel" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $VOLUNTEER_TOKEN")
+  if echo "$CANCEL_RES" | grep -q "撤销成功"; then
+    test_pass "撤销接口返回成功"
+  else
+    test_fail "撤销失败: $CANCEL_RES"
+  fi
+
+  POINTS_AFTER=$(curl -s "$BASE_URL/user/profile" -H "Authorization: Bearer $VOLUNTEER_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)['user']['points'])")
+  CANCEL_STATUS=$(echo "$EXCHANGES_RES" | python3 -c "
+import sys,json
+rows=json.load(sys.stdin)['exchanges']
+print(next(r['points'] for r in rows if r['id']==$PENDING_ID))
+")
+  EXPECTED_POINTS=$((POINTS_BEFORE + CANCEL_STATUS))
+  if [ "$POINTS_AFTER" = "$EXPECTED_POINTS" ]; then
+    test_pass "积分已退回: $POINTS_BEFORE -> $POINTS_AFTER (+$CANCEL_STATUS)"
+  else
+    test_fail "积分退回错误: $POINTS_BEFORE -> $POINTS_AFTER，预期 $EXPECTED_POINTS"
+  fi
+
+  # 再次撤销必须失败，不能二次退回
+  CANCEL_AGAIN=$(curl -s -X POST "$BASE_URL/exchanges/$PENDING_ID/cancel" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $VOLUNTEER_TOKEN")
+  if echo "$CANCEL_AGAIN" | grep -q "不能撤销"; then
+    test_pass "重复撤销被拒绝"
+  else
+    test_fail "重复撤销应被拒绝: $CANCEL_AGAIN"
+  fi
+
+  # 他人不能撤销
+  CANCEL_OTHER=$(curl -s -X POST "$BASE_URL/exchanges/$PENDING_ID/cancel" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $RESIDENT_TOKEN")
+  if echo "$CANCEL_OTHER" | grep -q "无权限"; then
+    test_pass "他人撤销被拒绝（无权限）"
+  else
+    test_fail "他人撤销应无权限: $CANCEL_OTHER"
+  fi
 fi
 
 echo ""

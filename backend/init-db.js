@@ -147,13 +147,34 @@ const initData = async () => {
         user_id INT NOT NULL,
         gift_id INT NOT NULL,
         points INT NOT NULL,
-        status ENUM('pending', 'shipped', 'completed') DEFAULT 'pending',
+        request_id VARCHAR(64),
+        status ENUM('pending', 'shipped', 'completed', 'cancelled') DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (gift_id) REFERENCES gifts(id),
+        UNIQUE KEY uk_user_request (user_id, request_id),
         INDEX idx_user_id (user_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    // 旧库升级：补充幂等键与撤销状态（重复执行不会报错）
+    const [oldStatusCol] = await pool.query(
+      `SELECT COLUMN_TYPE AS columnType FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = 'volunteer_db' AND TABLE_NAME = 'exchanges' AND COLUMN_NAME = 'status'`
+    );
+    if (oldStatusCol.length > 0 && !oldStatusCol[0].columnType.includes('cancelled')) {
+      await pool.query(
+        "ALTER TABLE exchanges MODIFY COLUMN status ENUM('pending', 'shipped', 'completed', 'cancelled') DEFAULT 'pending'"
+      );
+    }
+    const [oldRequestCol] = await pool.query(
+      `SELECT 1 FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = 'volunteer_db' AND TABLE_NAME = 'exchanges' AND COLUMN_NAME = 'request_id'`
+    );
+    if (oldRequestCol.length === 0) {
+      await pool.query("ALTER TABLE exchanges ADD COLUMN request_id VARCHAR(64) NULL AFTER points");
+      await pool.query('ALTER TABLE exchanges ADD UNIQUE KEY uk_user_request (user_id, request_id)');
+    }
     console.log('✅ 兑换记录表创建完成');
 
     // 清空旧数据

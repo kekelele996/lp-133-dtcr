@@ -41,8 +41,16 @@ module.exports = {
   },
   rewards: {
     giftNotFound: '礼品不存在',
+    userNotFound: '用户不存在',
+    giftUnavailable: '礼品已下架',
+    outOfStock: '礼品库存不足',
     insufficientPoints: '积分不足',
     exchanged: '兑换成功',
+    duplicateRequest: '请勿重复提交兑换请求',
+    exchangeNotFound: '兑换记录不存在',
+    cancelForbidden: '无权限撤销该兑换记录',
+    cancelNotAllowed: '已发货或已完成的兑换不能撤销',
+    cancelled: '撤销成功，积分和库存已退回',
   },
   server: {
     started: '志愿者互助平台后端服务启动成功',
