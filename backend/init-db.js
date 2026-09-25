@@ -147,10 +147,13 @@ const initData = async () => {
         user_id INT NOT NULL,
         gift_id INT NOT NULL,
         points INT NOT NULL,
-        status ENUM('pending', 'shipped', 'completed') DEFAULT 'pending',
+        request_id VARCHAR(64) NULL,
+        status ENUM('pending', 'shipped', 'completed', 'cancelled') DEFAULT 'pending',
+        cancelled_at DATETIME NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (gift_id) REFERENCES gifts(id),
+        UNIQUE INDEX uk_user_request (user_id, request_id),
         INDEX idx_user_id (user_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);

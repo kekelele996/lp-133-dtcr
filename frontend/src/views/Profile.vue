@@ -91,16 +91,40 @@
               
               <el-table v-else :data="exchanges" stripe>
                 <el-table-column prop="name" label="礼品名称" />
-                <el-table-column prop="points" label="消耗积分">
+                <el-table-column label="剩余库存" width="90">
                   <template #default="{ row }">
-                    <span class="text-red-500">-{{ row.points }}</span>
+                    <span :class="row.remaining_stock > 0 ? 'text-gray-600' : 'text-red-500'">
+                      {{ row.remaining_stock ?? 0 }}
+                    </span>
                   </template>
                 </el-table-column>
-                <el-table-column prop="status" label="状态">
+                <el-table-column label="积分" width="100">
                   <template #default="{ row }">
-                    <el-tag v-if="row.status === 'pending'" type="warning">待发货</el-tag>
+                    <span v-if="row.status === 'cancelled'" class="text-green-600">+{{ row.points }} 已退回</span>
+                    <span v-else class="text-red-500">-{{ row.points }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="status" label="状态" width="130">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.status === 'pending'" type="warning">待发货（可撤销）</el-tag>
                     <el-tag v-else-if="row.status === 'shipped'" type="primary">已发货</el-tag>
-                    <el-tag v-else type="success">已完成</el-tag>
+                    <el-tag v-else-if="row.status === 'completed'" type="success">已完成</el-tag>
+                    <el-tag v-else type="info">已撤销</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="100">
+                  <template #default="{ row }">
+                    <el-button
+                      v-if="row.status === 'pending'"
+                      type="danger"
+                      size="small"
+                      plain
+                      :loading="cancellingId === row.id"
+                      @click="handleCancel(row)"
+                    >
+                      撤销
+                    </el-button>
+                    <span v-else class="text-gray-300 text-xs">不可撤销</span>
                   </template>
                 </el-table-column>
                 <el-table-column prop="created_at" label="兑换时间" width="180">
@@ -149,7 +173,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useUserStore } from '@/stores/user'
 import api from '@/utils/api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const userStore = useUserStore()
 const user = computed(() => userStore.user)
@@ -161,6 +185,7 @@ const exchangesLoading = ref(true)
 const activeTab = ref('services')
 const editDialogVisible = ref(false)
 const saving = ref(false)
+const cancellingId = ref(null)
 
 const editForm = reactive({
   name: '',
@@ -197,6 +222,32 @@ const fetchExchanges = async () => {
     exchanges.value = res.data.exchanges
   } finally {
     exchangesLoading.value = false
+  }
+}
+
+const handleCancel = async (exchange) => {
+  if (cancellingId.value !== null) return
+  try {
+    await ElMessageBox.confirm(
+      `撤销「${exchange.name}」的兑换吗？${exchange.points} 积分和 1 件库存将退回。`,
+      '确认撤销',
+      {
+        confirmButtonText: '确定撤销',
+        cancelButtonText: '再想想',
+        type: 'warning'
+      }
+    )
+
+    cancellingId.value = exchange.id
+    await api.post(`/exchanges/${exchange.id}/cancel`)
+    ElMessage.success('撤销成功，积分与库存已退回')
+    await Promise.all([userStore.fetchUserInfo(), fetchExchanges()])
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.message || '撤销失败')
+    }
+  } finally {
+    cancellingId.value = null
   }
 }
 

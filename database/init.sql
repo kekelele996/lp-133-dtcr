@@ -121,10 +121,13 @@ CREATE TABLE IF NOT EXISTS exchanges (
   user_id INT NOT NULL COMMENT '用户ID',
   gift_id INT NOT NULL COMMENT '礼品ID',
   points INT NOT NULL COMMENT '消耗积分',
-  status ENUM('pending', 'shipped', 'completed') DEFAULT 'pending' COMMENT '状态',
+  request_id VARCHAR(64) NULL COMMENT '幂等请求ID，同一请求重复到达只生成一笔记录',
+  status ENUM('pending', 'shipped', 'completed', 'cancelled') DEFAULT 'pending' COMMENT '状态: pending-待发货, shipped-已发货, completed-已完成, cancelled-已撤销',
+  cancelled_at DATETIME NULL COMMENT '撤销时间',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (gift_id) REFERENCES gifts(id),
+  UNIQUE INDEX uk_user_request (user_id, request_id),
   INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='兑换记录表';
 
